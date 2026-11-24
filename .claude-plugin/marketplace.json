@@ -1,0 +1,5 @@
+{
+  "name": "trading-desk",
+  "owner": { "name": "trading-desk" },
+  "plugins": [{ "name": "trading-desk", "source": "./" }]
+}
