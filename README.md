@@ -27,10 +27,10 @@ Open with `/desk`. Auto ON/OFF runs cycles on a 5, 15 or 60 minute timer, starti
 At the prompt of a Claude Code terminal session:
 
 ```
-/plugin install trading-desk --marketplace <owner>/trading-desk
+/plugin install trading-desk --marketplace tsakummatata/trading-desk
 ```
 
-Answer `y` to add the marketplace, then pick a scope. From a shell: `claude plugin install trading-desk --marketplace <owner>/trading-desk`. In the desktop app: click + next to the prompt box, then Plugins, Add marketplace with `<owner>/trading-desk`, then Add plugin.
+Answer `y` to add the marketplace, then pick a scope. From a shell: `claude plugin install trading-desk --marketplace tsakummatata/trading-desk`. In the desktop app: click + next to the prompt box, then Plugins, Add marketplace with `tsakummatata/trading-desk`, then Add plugin.
 
 This repository is private: installing needs read access on GitHub and a git credential for github.com on that machine (an SSH key, or `gh auth login` then `gh auth setup-git`).
 
