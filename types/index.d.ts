@@ -66,7 +66,7 @@ export type Mood = 'trend' | 'chop' | 'panic'
 
 export type Idea2 = { title: string; why: string; kind: 'setting' | 'agent' | 'code'; impact: 'high' | 'medium' | 'low' }
 
-export type ModelTally = { calls: number; input: number; output: number; cached: number }
+export type ModelTally = { calls: number; input: number; output: number; cached: number; created?: number }
 export type Costs = { since: number; total: Record<string, ModelTally>; lastCycle: Record<string, ModelTally> }
 
 export type Settings = { exposure: number; learnRate: number; minTrade: number; agentScale: Record<string, number> }

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { AGENTS, DEFAULT_SETTINGS, scorecard, parsePluginPicks, brainstormPrompt, improverPrompt, parseImprover, shouldThink, NET_CAP, agentPrompt, alertsFor, moodOf, addUsage, huddleDigest, mergeTally, parseYouTube, VOL_BOOST, volScale, LIMITS, clampSettings, hadLoss, parseChief, periodReport, REBALANCE_MS, START_CASH, cleanNews, isRebalanceDue, prior, equity, newDesk, parseIdeas, parseSignals, rebalance, train, vote, withAgents } from './desk'
+import { AGENTS, DEFAULT_SETTINGS, cacheWarmers, scorecard, parsePluginPicks, brainstormPrompt, improverPrompt, parseImprover, shouldThink, NET_CAP, agentPrompt, alertsFor, moodOf, addUsage, huddleDigest, mergeTally, parseYouTube, VOL_BOOST, volScale, LIMITS, clampSettings, hadLoss, parseChief, periodReport, REBALANCE_MS, START_CASH, cleanNews, isRebalanceDue, prior, equity, newDesk, parseIdeas, parseSignals, rebalance, train, vote, withAgents } from './desk'
 
 test('parses agent replies and clamps signals', async () => {
   const p = parseSignals('Sure: {"BTC": 2, "ETH": -0.5, "SOL": "x", "note": "hi"}')
@@ -126,7 +126,7 @@ test('huddle digest lists every call the team made', async () => {
 
 test('cost tally adds calls and tokens per model', async () => {
   const t = addUsage(addUsage({}, 'haiku', { input_tokens: 100, output_tokens: 10 }), 'haiku', { input_tokens: 50, output_tokens: 5, cache_read_input_tokens: 7 })
-  expect(t.haiku).toEqual({ calls: 2, input: 150, output: 15, cached: 7 })
+  expect(t.haiku).toEqual({ calls: 2, input: 150, output: 15, cached: 7, created: 0 })
   const m = mergeTally(t, { sonnet: { calls: 1, input: 1, output: 1, cached: 0 } })
   expect(m.sonnet!.calls + m.haiku!.calls).toBe(3)
   expect(t.sonnet).toBe(undefined) // merge does not mutate its input
@@ -241,4 +241,12 @@ test('an agent sees its own scorecard, including last period\'s wrong calls', as
   expect(card.includes('called BTC the wrong way')).toBe(true)
   expect(card.includes('below a coin flip')).toBe(true)
   expect(scorecard(newDesk(0), 'trend')).toBe('Your record: no scored calls yet.')
+})
+
+test('one warm-up call per model, and cache writes are tallied', async () => {
+  const warm = cacheWarmers([{ id: 'a' }, { id: 'b', model: 'sonnet' }, { id: 'c' }, { id: 'd', model: 'sonnet' }])
+  expect(warm.map(a => a.id)).toEqual(['a', 'b'])
+  const t = addUsage({}, 'haiku', { input_tokens: 10, output_tokens: 1, cache_creation_input_tokens: 5000 })
+  expect(t.haiku!.created).toBe(5000)
+  expect(mergeTally(t, t).haiku!.created).toBe(10000)
 })

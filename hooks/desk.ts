@@ -428,18 +428,19 @@ export function reporterPrompt(digest: string, ensemble: Record<string, number>,
 
 // ---------- Cost tracker (tokens per model; dollars come from the session's own estimate) ----------
 
-export type Usage = { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null }
+export type Usage = { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null }
 
-export function addUsage(t: Record<string, { calls: number; input: number; output: number; cached: number }>, model: string, u: Usage | undefined) {
+export function addUsage(t: Record<string, { calls: number; input: number; output: number; cached: number; created?: number }>, model: string, u: Usage | undefined) {
   const row = (t[model] ??= { calls: 0, input: 0, output: 0, cached: 0 })
   row.calls++
   row.input += u?.input_tokens ?? 0
   row.output += u?.output_tokens ?? 0
   row.cached += u?.cache_read_input_tokens ?? 0
+  row.created = (row.created ?? 0) + (u?.cache_creation_input_tokens ?? 0)
   return t
 }
 
-export function mergeTally<T extends Record<string, { calls: number; input: number; output: number; cached: number }>>(a: T, b: T): T {
+export function mergeTally<T extends Record<string, { calls: number; input: number; output: number; cached: number; created?: number }>>(a: T, b: T): T {
   const out = structuredClone(a)
   for (const [m, r] of Object.entries(b)) {
     const row = ((out as Record<string, typeof r>)[m] ??= { calls: 0, input: 0, output: 0, cached: 0 })
@@ -447,6 +448,7 @@ export function mergeTally<T extends Record<string, { calls: number; input: numb
     row.input += r.input
     row.output += r.output
     row.cached += r.cached
+    row.created = (row.created ?? 0) + (r.created ?? 0)
   }
   return out
 }
@@ -646,4 +648,18 @@ export function scorecard(d: Desk, id: string): string {
     last ? (last.wrong.length ? `Last period you called ${last.wrong.join(', ')} the wrong way. Ask yourself why before repeating that call.` : 'Last period none of your calls went the wrong way.') : '',
     rate < 45 ? 'You are below a coin flip: be more selective and use 0 when your setup is not clearly there.' : '',
   ].filter(Boolean).join(' ')
+}
+
+/**
+ * The first round-1 call of each model, sent ahead of the rest. Cache entries are per model, and calls
+ * sent all at once can't read an entry none of them has written yet (measured: 0 cached of ~1.1M tokens).
+ */
+export function cacheWarmers<T extends { model?: string }>(agents: readonly T[]): T[] {
+  const seen = new Set<string>()
+  return agents.filter(a => {
+    const m = a.model ?? 'haiku'
+    if (seen.has(m)) return false
+    seen.add(m)
+    return true
+  })
 }

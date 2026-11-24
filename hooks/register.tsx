@@ -5,7 +5,7 @@ import type { Desk, Listing, Market, ModelTally, Talk } from '../types'
 import type { Call } from './desk'
 import {
   AGENTS, SYMBOLS, START_CASH, addEquityPoint, agentPrompt, cleanNews, equity, newDesk,
-  CHIEF, DEFAULT_SETTINGS, scorecard, IMPROVER, PLUGIN_SCOUT, parsePluginPicks, pluginScoutPrompt, agentName, brainstormPrompt, improverPrompt, parseImprover, MOODS, alertsFor, moodOf, addUsage, huddleDigest, huddlePrompt, mergeTally, parseYouTube, reporterPrompt, skepticPrompt, chiefPrompt, hadLoss, memo, parseChief, periodReport, settingsOf, isRebalanceDue, shouldThink, parseIdeas, parseSignals, rebalance, REBALANCE_MS, scoutPrompt, sparkline, train, trimLog, vote, withAgents,
+  CHIEF, DEFAULT_SETTINGS, cacheWarmers, scorecard, IMPROVER, PLUGIN_SCOUT, parsePluginPicks, pluginScoutPrompt, agentName, brainstormPrompt, improverPrompt, parseImprover, MOODS, alertsFor, moodOf, addUsage, huddleDigest, huddlePrompt, mergeTally, parseYouTube, reporterPrompt, skepticPrompt, chiefPrompt, hadLoss, memo, parseChief, periodReport, settingsOf, isRebalanceDue, shouldThink, parseIdeas, parseSignals, rebalance, REBALANCE_MS, scoutPrompt, sparkline, train, trimLog, vote, withAgents,
 } from './desk'
 
 const PANE = 'trading-desk'
@@ -148,10 +148,15 @@ async function tick($: EngineInterface, force = false) {
 
     // Round 1: every agent and the Scout read the market on their own.
     const round1 = AGENTS.filter(a => !a.huddleOnly)
-    const [scout, ...r1] = await Promise.all([
-      ask('sonnet', scoutPrompt(markets, intel, note), 1500),
-      ...round1.map(a => ask(a.model ?? 'haiku', agentPrompt(a.style, markets, intel, note, [scorecard(before, a.id), a.id === 'bigpicture' ? daily : ''].filter(Boolean).join('\n\n')), a.model ? 800 : 300)),
-    ])
+    const call = (a: (typeof round1)[number]) =>
+      ask(a.model ?? 'haiku', agentPrompt(a.style, markets, intel, note, [scorecard(before, a.id), a.id === 'bigpicture' ? daily : ''].filter(Boolean).join('\n\n')), a.model ? 800 : 300)
+    // One call per model writes the shared prompt cache first; the rest then read it at the cached rate.
+    const warmers = cacheWarmers(round1)
+    const warmed = new Map(warmers.map((a, i) => [a.id, i]))
+    const warmReplies = await Promise.all(warmers.map(call))
+    const [scout, ...rest] = await Promise.all([ask('sonnet', scoutPrompt(markets, intel, note), 1500), ...round1.filter(a => !warmed.has(a.id)).map(call)])
+    let k = 0
+    const r1 = round1.map(a => (warmed.has(a.id) ? warmReplies[warmed.get(a.id)!] : rest[k++]))
     const ideas = scout?.isAnswered ? parseIdeas(scout.text) : []
     const first: Record<string, Call> = {}
     round1.forEach((a, i) => {
@@ -703,7 +708,7 @@ export const register: Register = on => {
           {usageRows.map(([m, r]) => (
             <Box key={`use-${m}`} flexDirection="row" justifyContent="space-between">
               <Text>{m}</Text>
-              <Text tabular dimColor>{r.calls} calls · {tok(r.input + r.output)} tokens</Text>
+              <Text tabular dimColor>{r.calls} calls · {tok(r.input + r.output)} tokens · {tok(r.cached)} from cache</Text>
             </Box>
           ))}
           <Text dimColor size="footnote">
