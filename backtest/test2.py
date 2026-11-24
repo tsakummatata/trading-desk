@@ -72,7 +72,7 @@ def simulate(P, S, V, starts, cfg, rng):
             net = target.sum(axis=1)
             target *= np.minimum(1, cap * eq / np.maximum(np.abs(net), 1e-12))[:, None]
             delta = target - pos * px
-            trade = np.abs(delta) >= 0.03 * eq[:, None]
+            trade = np.abs(delta) >= cfg.get('min_trade', 0.03) * eq[:, None]
             delta = np.where(trade, delta, 0)
             cash -= delta.sum(axis=1) + np.abs(delta).sum(axis=1) * FEE
             pos = np.where(trade, target / px, pos)

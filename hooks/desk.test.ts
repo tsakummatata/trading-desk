@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { AGENTS, DEFAULT_SETTINGS, cacheWarmers, scorecard, parsePluginPicks, brainstormPrompt, improverPrompt, parseImprover, shouldThink, NET_CAP, agentPrompt, alertsFor, moodOf, addUsage, huddleDigest, mergeTally, parseYouTube, VOL_BOOST, volScale, LIMITS, clampSettings, hadLoss, parseChief, periodReport, REBALANCE_MS, START_CASH, cleanNews, isRebalanceDue, prior, equity, newDesk, parseIdeas, parseSignals, rebalance, train, vote, withAgents } from './desk'
+import { AGENTS, DEFAULT_SETTINGS, isIdle, cacheWarmers, scorecard, parsePluginPicks, brainstormPrompt, improverPrompt, parseImprover, shouldThink, NET_CAP, agentPrompt, alertsFor, moodOf, addUsage, huddleDigest, mergeTally, parseYouTube, VOL_BOOST, volScale, LIMITS, clampSettings, hadLoss, parseChief, periodReport, REBALANCE_MS, START_CASH, cleanNews, isRebalanceDue, prior, equity, newDesk, parseIdeas, parseSignals, rebalance, train, vote, withAgents } from './desk'
 
 test('parses agent replies and clamps signals', async () => {
   const p = parseSignals('Sure: {"BTC": 2, "ETH": -0.5, "SOL": "x", "note": "hi"}')
@@ -249,4 +249,14 @@ test('one warm-up call per model, and cache writes are tallied', async () => {
   const t = addUsage({}, 'haiku', { input_tokens: 10, output_tokens: 1, cache_creation_input_tokens: 5000 })
   expect(t.haiku!.created).toBe(5000)
   expect(mergeTally(t, t).haiku!.created).toBe(10000)
+})
+
+test('Social Sentiment sits out without a feed, so it neither costs calls nor dilutes the vote', async () => {
+  const d = newDesk(0)
+  expect(isIdle(d, 'social')).toBe(true)
+  expect(isIdle({ ...d, social: { t: 1, status: '', items: ['BTC to the moon'] } }, 'social')).toBe(false)
+  expect(isIdle(d, 'trend')).toBe(false)
+  // An agent with no signal is left out of the vote rather than counted as 0.
+  const v = vote({ ...d, agents: d.agents.map(a => ({ ...a, signals: (a.id === 'trend' ? { BTC: 1 } : {}) as Record<string, number> })) })
+  expect(v.BTC).toBe(1)
 })

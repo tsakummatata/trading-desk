@@ -5,7 +5,7 @@ import type { Desk, Listing, Market, ModelTally, Talk } from '../types'
 import type { Call } from './desk'
 import {
   AGENTS, SYMBOLS, START_CASH, addEquityPoint, agentPrompt, cleanNews, equity, newDesk,
-  CHIEF, DEFAULT_SETTINGS, cacheWarmers, scorecard, IMPROVER, PLUGIN_SCOUT, parsePluginPicks, pluginScoutPrompt, agentName, brainstormPrompt, improverPrompt, parseImprover, MOODS, alertsFor, moodOf, addUsage, huddleDigest, huddlePrompt, mergeTally, parseYouTube, reporterPrompt, skepticPrompt, chiefPrompt, hadLoss, memo, parseChief, periodReport, settingsOf, isRebalanceDue, shouldThink, parseIdeas, parseSignals, rebalance, REBALANCE_MS, scoutPrompt, sparkline, train, trimLog, vote, withAgents,
+  CHIEF, DEFAULT_SETTINGS, isIdle, cacheWarmers, scorecard, IMPROVER, PLUGIN_SCOUT, parsePluginPicks, pluginScoutPrompt, agentName, brainstormPrompt, improverPrompt, parseImprover, MOODS, alertsFor, moodOf, addUsage, huddleDigest, huddlePrompt, mergeTally, parseYouTube, reporterPrompt, skepticPrompt, chiefPrompt, hadLoss, memo, parseChief, periodReport, settingsOf, isRebalanceDue, shouldThink, parseIdeas, parseSignals, rebalance, REBALANCE_MS, scoutPrompt, sparkline, train, trimLog, vote, withAgents,
 } from './desk'
 
 const PANE = 'trading-desk'
@@ -147,7 +147,7 @@ async function tick($: EngineInterface, force = false) {
     const parse = (r: Awaited<ReturnType<typeof ask>> | undefined) => (r?.isAnswered ? parseSignals(r.text) : null)
 
     // Round 1: every agent and the Scout read the market on their own.
-    const round1 = AGENTS.filter(a => !a.huddleOnly)
+    const round1 = AGENTS.filter(a => !a.huddleOnly && !isIdle(before, a.id))
     const call = (a: (typeof round1)[number]) =>
       ask(a.model ?? 'haiku', agentPrompt(a.style, markets, intel, note, [scorecard(before, a.id), a.id === 'bigpicture' ? daily : ''].filter(Boolean).join('\n\n')), a.model ? 800 : 300)
     // One call per model writes the shared prompt cache first; the rest then read it at the cached rate.
@@ -189,7 +189,7 @@ async function tick($: EngineInterface, force = false) {
         ...d0,
         agents: d0.agents.map(a => {
           const c = final[a.id]
-          return c ? { ...a, pending: c.signals, note: c.note } : { ...a, pending: {}, note: 'no answer this cycle' }
+          return c ? { ...a, pending: c.signals, note: c.note } : { ...a, pending: {}, note: isIdle(d0, a.id) ? 'Sitting out: no social feed (YouTube key not set)' : 'no answer this cycle' }
         }),
       }
       d = { ...d, ensemble: vote(d, 'pending') }

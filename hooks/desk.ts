@@ -8,10 +8,12 @@ export const START_CASH = 10_000
 const FEE = 0.0005 // 5 bps per side, simulated
 // From the 800-setting walk-forward tune: learnRate 40 (80 and 160 learned noise and did worse; so did
 // learning every hour), minTrade 3% (fewer fee-eating small trades).
-export const DEFAULT_SETTINGS: Settings = { exposure: 1, learnRate: 40, minTrade: 0.03, agentScale: {} }
+// minTrade 8%: better than 3% in both backtest periods (unseen median -2.01% -> -1.36%); higher values only
+// looked better in the falling unseen period because they trade less, and were worse in the earlier one.
+export const DEFAULT_SETTINGS: Settings = { exposure: 1, learnRate: 40, minTrade: 0.08, agentScale: {} }
 // The Head AI may only move settings inside these bounds. exposure tops out at the tested 100%:
 // it can cut risk after losses, never add leverage beyond what the backtest covered.
-export const LIMITS = { exposure: [0.2, 1], learnRate: [10, 80], minTrade: [0.005, 0.05], agentScale: [0, 1.5] } as const
+export const LIMITS = { exposure: [0.2, 1], learnRate: [10, 80], minTrade: [0.02, 0.12], agentScale: [0, 1.5] } as const
 
 export function settingsOf(d: Desk): Settings {
   return { ...DEFAULT_SETTINGS, ...d.settings, agentScale: { ...d.settings?.agentScale } }
@@ -533,7 +535,7 @@ export function improverPrompt(d: Desk, talk: Talk[] = []): string {
     `AI usage: ${tokens.join('; ') || 'none yet'}. Social feed: ${d.social?.status ?? 'unknown'}.`,
     `Your previous list: ${(d.backlog?.items ?? []).map(i => i.title).join(' | ') || 'none'}`,
     '',
-    'Already tested on price history and rejected, do not propose again: per-coin stop losses, mood-based agent weights, learning faster than rate 40, learning every hour, rebalancing more often than 12h, cutting the chart team below 7 agents.',
+    'Already tested on price history and rejected, do not propose again: per-coin stop losses, mood-based agent weights, learning faster than rate 40, learning every hour, rebalancing more often than 12h, cutting the chart team below 7 agents, minTrade above 8%, hand-capping or boosting agents on a few periods of hit rates (the learning already reweights them; a few periods are noise).',
     'Never propose placing real trades automatically or giving the desk write access to the trading account.',
     '',
     ...(talk.length
@@ -663,3 +665,6 @@ export function cacheWarmers<T extends { model?: string }>(agents: readonly T[])
     return true
   })
 }
+
+/** An agent with nothing to read sits out: no AI call, and no zero vote diluting the others. */
+export const isIdle = (d: Desk, id: string) => id === 'social' && !d.social?.items.length
