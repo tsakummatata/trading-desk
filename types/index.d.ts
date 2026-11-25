@@ -54,6 +54,10 @@ export type Desk = {
   sent?: { t: number; title: string }[]
   /** Plugin Scout: ranked plugins and skills from the directory that could help the desk. */
   plugins?: { t: number; status: string; picks: PluginPick[]; seen: string[] }
+  /** Research AI: daily notes from forums, news and trading books, shared with the team. */
+  research?: { t: number; status: string; notes: string[]; sources: string[] }
+  /** The owner's real Liquid account, read-only snapshot. */
+  account?: { t: number; equity: number; available: number; positions: { symbol: string; side: string; value: number; pnl: number }[] }
 }
 
 export type PluginPick = { id: string; name: string; kind: 'plugin' | 'skill'; why: string; fit: 'high' | 'medium' | 'low'; firstSeen: number }
@@ -80,6 +84,6 @@ export type PeriodReport = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'trading-desk': { desk: Shaped<Desk>; busy: boolean; showAll: boolean; tab: string }
+    'trading-desk': { desk: Shaped<Desk>; busy: boolean; showAll: boolean; tab: string; doing: Record<string, string> }
   }
 }

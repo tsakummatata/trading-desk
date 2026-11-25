@@ -5,15 +5,15 @@ import type { Desk, Listing, Market, ModelTally, Talk } from '../types'
 import type { Call } from './desk'
 import {
   AGENTS, SYMBOLS, START_CASH, addEquityPoint, agentPrompt, cleanNews, equity, newDesk,
-  CHIEF, DEFAULT_SETTINGS, isIdle, cacheWarmers, scorecard, IMPROVER, PLUGIN_SCOUT, parsePluginPicks, pluginScoutPrompt, agentName, brainstormPrompt, improverPrompt, parseImprover, MOODS, alertsFor, moodOf, addUsage, huddleDigest, huddlePrompt, mergeTally, parseYouTube, reporterPrompt, skepticPrompt, chiefPrompt, hadLoss, memo, parseChief, periodReport, settingsOf, isRebalanceDue, shouldThink, parseIdeas, parseSignals, rebalance, REBALANCE_MS, scoutPrompt, sparkline, train, trimLog, vote, withAgents,
+  CHIEF, DEFAULT_SETTINGS, RESEARCH, RESEARCH_FEEDS, RESEARCH_TOPICS, parseHN, parseRss, researchPrompt, parseResearch, parseAccount, isIdle, cacheWarmers, scorecard, IMPROVER, PLUGIN_SCOUT, parsePluginPicks, pluginScoutPrompt, agentName, brainstormPrompt, improverPrompt, parseImprover, MOODS, alertsFor, moodOf, addUsage, huddleDigest, huddlePrompt, mergeTally, parseYouTube, reporterPrompt, skepticPrompt, chiefPrompt, hadLoss, memo, parseChief, periodReport, settingsOf, isRebalanceDue, shouldThink, parseIdeas, parseSignals, rebalance, REBALANCE_MS, scoutPrompt, sparkline, train, trimLog, vote, withAgents,
 } from './desk'
 
 const PANE = 'trading-desk'
 const STORE_KEY = 'desk-v1'
 const MCP_SERVER = 'liquid_trade'
-// Safety: the mod may only call these read-only market-data tools. $.mcp.call has no
-// permission prompt, so order/execution tools must never appear here.
-const READ_ONLY_TOOLS = ['get_technical_indicators', 'get_news', 'get_positioning_pulse', 'leaderboard_data', 'analyze_market'] as const
+// Safety: the mod may only call these read-only tools (market data, and a read of the owner's balance).
+// $.mcp.call has no permission prompt, so order/execution tools must never appear here.
+const READ_ONLY_TOOLS = ['get_technical_indicators', 'get_news', 'get_positioning_pulse', 'leaderboard_data', 'analyze_market', 'get_portfolio'] as const
 type ReadOnlyTool = (typeof READ_ONLY_TOOLS)[number]
 
 async function readTool($: EngineInterface, tool: ReadOnlyTool, args: Record<string, unknown>): Promise<string | null> {
@@ -82,6 +82,49 @@ const desk = atom({ plugin: 'trading-desk', key: 'desk' } as const, newDesk(0), 
 const busy = atom({ plugin: 'trading-desk', key: 'busy' } as const, false)
 const showAll = atom({ plugin: 'trading-desk', key: 'showAll' } as const, false)
 const tabAtom = atom({ plugin: 'trading-desk', key: 'tab' } as const, 'overview')
+/** What each AI is doing right now, for the Office tab. Cleared when the cycle ends. */
+const doing = atom({ plugin: 'trading-desk', key: 'doing' } as const, {} as Record<string, string>)
+const setDoing = ($: EngineInterface, ids: string[], what: string | null) =>
+  update($, doing, w => {
+    const x = { ...w }
+    for (const id of ids) {
+      if (what) x[id] = what
+      else delete x[id]
+    }
+    return x
+  })
+
+/** The owner's real Liquid balance and positions (read-only), refreshed every check. */
+async function refreshAccount($: EngineInterface) {
+  const text = await readTool($, 'get_portfolio', {}).catch(() => null)
+  const account = text ? parseAccount(text, Date.now()) : null
+  if (account) await update($, desk, d => ({ ...d, account }))
+}
+
+/** Research AI: once a day, reads forum and news headlines plus what it knows from trading books, and writes notes for the team. */
+async function research($: EngineInterface) {
+  await setDoing($, ['research'], '📖 Reading forums, news and books')
+  try {
+    const since = Math.floor(Date.now() / 1000) - 2 * 86400
+    const get = (url: string) => $.http.fetch(url).then(r => (r.ok ? r.text : '')).catch(() => '')
+    const [news, ...forums] = await Promise.all([get(RESEARCH_FEEDS.news), ...RESEARCH_TOPICS.map(q => get(`${RESEARCH_FEEDS.forum}${since}&hitsPerPage=12&query=${encodeURIComponent(q)}`))])
+    const forum = [...new Set(forums.flatMap(parseHN))]
+    const headlines = parseRss(news)
+    const d = await read($, desk)
+    const r = await $.model.complete({ model: RESEARCH.model, prompt: researchPrompt(d, forum, headlines), maxTokens: 900 })
+    const t = addUsage({}, RESEARCH.model, r.usage)
+    const out = r.isAnswered ? parseResearch(r.text) : null
+    const status = `${forum.length} forum posts, ${headlines.length} news headlines${out ? '' : ' · no usable notes'}`
+    await update($, desk, x => ({
+      ...x,
+      research: { t: Date.now(), status, notes: out?.notes ?? x.research?.notes ?? [], sources: out?.sources ?? x.research?.sources ?? [] },
+      costs: { since: x.costs?.since ?? Date.now(), total: mergeTally(x.costs?.total ?? {}, t), lastCycle: x.costs?.lastCycle ?? {} },
+    }))
+    await log($, `${RESEARCH.name}: ${status}${out ? `, top note: ${out.notes[0]}` : ''}`)
+  } finally {
+    await setDoing($, ['research'], null)
+  }
+}
 const SOCIAL_EVERY_MS = 3600_000 // a YouTube search costs 100 of the API's 10,000 daily quota units
 const YOUTUBE = 'https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&order=date&maxResults=20&q=' + encodeURIComponent('bitcoin|ethereum|solana|hyperliquid crypto')
 
@@ -119,6 +162,7 @@ async function tick($: EngineInterface, force = false) {
       return
     }
     const prices = Object.fromEntries(markets.map(m => [m.symbol, m.price]))
+    await refreshAccount($)
     const vol = Object.fromEntries(markets.filter(m => m.vol).map(m => [m.symbol, m.vol!]))
 
     const mood = moodOf(markets.find(m => m.symbol === 'BTC'))
@@ -149,8 +193,13 @@ async function tick($: EngineInterface, force = false) {
     // Round 1: every agent and the Scout read the market on their own.
     const round1 = AGENTS.filter(a => !a.huddleOnly && !isIdle(before, a.id))
     const call = (a: (typeof round1)[number]) =>
-      ask(a.model ?? 'haiku', agentPrompt(a.style, markets, intel, note, [scorecard(before, a.id), a.id === 'bigpicture' ? daily : ''].filter(Boolean).join('\n\n')), a.model ? 800 : 300)
+      ask(a.model ?? 'haiku', agentPrompt(a.style, markets, intel, note, [scorecard(before, a.id), a.id === 'bigpicture' ? daily : ''].filter(Boolean).join('\n\n')), a.model ? 800 : 300).then(async r => {
+        await setDoing($, [a.id], '✓ Voted, waiting for the huddle')
+        return r
+      })
     // One call per model writes the shared prompt cache first; the rest then read it at the cached rate.
+    await setDoing($, round1.map(a => a.id), '📊 Reading the market')
+    await setDoing($, ['scout'], '🧭 Hunting for setups')
     const warmers = cacheWarmers(round1)
     const warmed = new Map(warmers.map((a, i) => [a.id, i]))
     const warmReplies = await Promise.all(warmers.map(call))
@@ -165,10 +214,14 @@ async function tick($: EngineInterface, force = false) {
     })
 
     // Huddle: the Skeptic reads everyone's calls and challenges them; then each agent may revise.
+    await setDoing($, ['scout'], null)
+    await setDoing($, ['skeptic'], '🗣 Challenging the team')
     const skepticDef = AGENTS.find(a => a.id === 'skeptic')!
     const sk = parse(await ask('sonnet', skepticPrompt(skepticDef.style, markets, intel, huddleDigest(first)), 800))
     const digest = huddleDigest(sk ? { ...first, skeptic: sk } : first)
     const challenge = sk?.note ?? ''
+    await setDoing($, ['skeptic'], null)
+    await setDoing($, Object.keys(first), '🤝 In the huddle')
     const r2 = await Promise.all(
       Object.entries(first).map(async ([id, mine]) => {
         const style = AGENTS.find(a => a.id === id)!.style
@@ -204,17 +257,21 @@ async function tick($: EngineInterface, force = false) {
       d = { ...d, prices: { ...d0.prices, ...prices }, ticks: d.ticks + 1, lastTick: now, ideas: ideas.length ? ideas : d.ideas }
       return trimLog(addEquityPoint(d, prices, now))
     })
+    await setDoing($, Object.keys(first), null)
     // The Reporter sums the cycle up in plain words for the owner.
+    await setDoing($, ['reporter'], '✍️ Writing the summary')
     const rep = await ask('haiku', reporterPrompt(huddleDigest(final), (await read($, desk)).ensemble, revised, challenge), 300)
     await update($, desk, x => ({
       ...x,
       report: { t: now, text: rep.isAnswered ? rep.text.trim().slice(0, 600) : x.report?.text ?? '', challenge, revised },
       costs: { since: x.costs?.since ?? now, total: mergeTally(x.costs?.total ?? {}, tally), lastCycle: tally },
     }))
+    await setDoing($, ['reporter'], null)
     if ((await read($, desk)).lastReport?.t === now) await review($)
     await raiseAlerts($, before, now)
     await improve($, 'after the team meeting')
     if (Date.now() - ((await read($, desk)).plugins?.t ?? 0) > PLUGIN_SCOUT.everyMs) await scoutPlugins($)
+    if (Date.now() - ((await read($, desk)).research?.t ?? 0) > RESEARCH.everyMs) await research($)
     const d = await read($, desk)
     await $.store.set(STORE_KEY, d)
     const pnl = equity(d) - START_CASH
@@ -222,6 +279,7 @@ async function tick($: EngineInterface, force = false) {
   } catch (err) {
     await log($, `Cycle failed: ${err instanceof Error ? err.message : String(err)}`)
   } finally {
+    await update($, doing, () => ({}))
     await $.state.set({ plugin: 'trading-desk', key: 'busy' }, false)
   }
 }
@@ -234,7 +292,8 @@ async function review($: EngineInterface) {
     await log($, `${CHIEF.name}: nothing to review until the first full period has run.`)
     return
   }
-  const r = await $.model.complete({ model: CHIEF.model, prompt: chiefPrompt(d, report), maxTokens: 1200 })
+  await setDoing($, ['chief'], '👑 Reviewing the period')
+  const r = await $.model.complete({ model: CHIEF.model, prompt: chiefPrompt(d, report), maxTokens: 1200 }).finally(() => setDoing($, ['chief'], null))
   const t = addUsage({}, CHIEF.model, r.usage)
   await update($, desk, x => ({ ...x, costs: { since: x.costs?.since ?? Date.now(), total: mergeTally(x.costs?.total ?? {}, t), lastCycle: x.costs?.lastCycle ?? {} } }))
   const out = r.isAnswered ? parseChief(r.text, settingsOf(d)) : null
@@ -264,6 +323,8 @@ async function review($: EngineInterface) {
  * and have a cheap model rank it against the desk's known gaps. It never installs anything.
  */
 async function scoutPlugins($: EngineInterface) {
+  await setDoing($, ['plugins'], '🧩 Searching for add-ons')
+  try {
   const listings = new Map<string, Listing>()
   let failed = 0
   for (const kind of ['plugin', 'skill'] as const) {
@@ -287,6 +348,9 @@ async function scoutPlugins($: EngineInterface) {
   }
   await update($, desk, x => ({ ...x, plugins: { t: Date.now(), status, picks, seen: [...new Set([...prevSeen, ...all.map(l => l.id)])].slice(-500) } }))
   await log($, `${PLUGIN_SCOUT.name}: ${status}${picks.length ? `, top pick ${picks[0]!.name}` : ''}`)
+  } finally {
+    await setDoing($, ['plugins'], null)
+  }
 }
 
 let improving = false
@@ -300,6 +364,7 @@ async function improve($: EngineInterface, why: string, force = false) {
   const d0 = await read($, desk)
   if (improving || (!force && Date.now() - (d0.backlog?.t ?? 0) < IMPROVER.minGapMs)) return
   improving = true
+  await setDoing($, ['improver'], '💡 Thinking of upgrades')
   try {
     const tally: Record<string, ModelTally> = {}
     const draftR = await $.model.complete({ model: IMPROVER.model, prompt: improverPrompt(d0), maxTokens: 1500 })
@@ -333,6 +398,7 @@ async function improve($: EngineInterface, why: string, force = false) {
         : `${IMPROVER.name}: no usable ideas this time.`,
     )
   } finally {
+    await setDoing($, ['improver'], null)
     improving = false
   }
 }
@@ -432,6 +498,7 @@ export const register: Register = on => {
     const isBusy = await read($, busy)
     const expanded = await read($, showAll)
     const tab = await read($, tabAtom)
+    const busyWith = await read($, doing)
     const sessionCost = await $.session.usage().then(u => u.cost).catch(() => undefined)
     const tok = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n))
     const usageRows = Object.entries(d.costs?.total ?? {})
@@ -475,8 +542,8 @@ export const register: Register = on => {
     const reviewPlugin = (name: string, id: string, kind: string) => () =>
       void $.prompt.submit({
         text:
-          `Trading desk Plugin Scout found the ${kind} "${name}" (${id}). Review it: what it does, what it can read or change, ` +
-          'whether it would really help the desk, and any risk. Only offer to install it if it is worth it; never install without my OK.',
+          `Trading desk Plugin Scout: I want the ${kind} "${name}" (${id}). Check what it does, what it can read or change and any risk, ` +
+          'then show me its install card so I can add it with one click. Never install it without my OK.',
       })
     const sendProposal = sendIdea(CHIEF.name, d.chief?.codeProposal ?? '')
     const goLive = () =>
@@ -494,7 +561,7 @@ export const register: Register = on => {
     const up = ret >= 0
     const avg = SYMBOLS.reduce((s, x) => s + (d.ensemble[x] ?? 0), 0) / SYMBOLS.length
     const nextCheck = d.lastTick ? d.lastTick + d.intervalMin * 60_000 : 0
-    const tabs = [['overview', 'Overview'], ['team', 'Team'], ['updates', 'Updates'], ['activity', 'Activity'], ['settings', 'Settings']] as const
+    const tabs = [['overview', 'Overview'], ['office', 'Office'], ['team', 'Team'], ['updates', 'Updates'], ['activity', 'Activity'], ['settings', 'Settings']] as const
 
     const tabBar = (
       <Box flexDirection="row" gap={1}>
@@ -564,7 +631,78 @@ export const register: Register = on => {
             )
           })}
         </Box>
-        <Text dimColor size="footnote">Practice money only. A real trade only happens if you approve it in chat.</Text>
+        <Box {...card} borderColor="claude">
+          <Text weight="semibold">Your Liquid account <Text dimColor>· real money, read-only</Text></Text>
+          {d.account ? (
+            <Box flexDirection="column">
+              <Text>
+                <Text bold tabular>${d.account.equity.toFixed(2)}</Text>
+                <Text dimColor> · ${d.account.available.toFixed(2)} free · {d.account.positions.length ? `${d.account.positions.length} open` : 'no open trades'} · {ago(d.account.t)}</Text>
+              </Text>
+              {d.account.positions.map((p, i) => (
+                <Text key={`pos${i}`} size="footnote">
+                  {p.symbol} {p.side} ${p.value.toFixed(2)} <Text color={p.pnl >= 0 ? 'success' : 'error'}>{p.pnl >= 0 ? '+' : ''}{p.pnl.toFixed(2)}</Text>
+                </Text>
+              ))}
+            </Box>
+          ) : (
+            <Text dimColor>Shows after the next check (needs the Liquid connector).</Text>
+          )}
+          <Button key="live" label="💸 Trade on Liquid (you approve each one)" onPress={goLive} />
+          <Text dimColor size="footnote">Claude previews the team's trades in chat. Nothing is placed on your account without your OK.</Text>
+        </Box>
+      </Box>
+    )
+
+    const AVATAR: Record<string, string> = {
+      news: '📰', bigpicture: '🔭', liquidity: '💧', social: '📱', crowd: '👥', skeptic: '🧐', trend: '📈', momentum: '🚀', meanrev: '🔄',
+      vol: '🌪', contrarian: '🙃', risk: '🛡', swing: '🎯', chief: '👑', research: '📚', scout: '🧭', reporter: '✍️', improver: '💡', plugins: '🧩',
+    }
+    const STAFF: Record<string, { name: string; idle: string }> = {
+      chief: { name: 'Head AI', idle: d.chief?.brief ?? 'Reviews the team every 12 hours' },
+      research: { name: RESEARCH.name, idle: d.research?.notes[0] ?? 'Reads forums, news and books once a day' },
+      scout: { name: 'Trade Scout', idle: (d.ideas ?? [])[0] ? `Likes ${d.ideas![0]!.side} ${d.ideas![0]!.asset}` : 'Hunts setups each meeting' },
+      reporter: { name: 'Reporter', idle: 'Writes the plain summary' },
+      improver: { name: IMPROVER.name, idle: d.backlog?.items[0]?.title ?? 'Looks for upgrades' },
+      plugins: { name: PLUGIN_SCOUT.name, idle: d.plugins?.picks[0] ? `Top pick: ${d.plugins.picks[0].name}` : 'Searches add-ons daily' },
+    }
+    const arrows = (sig: Record<string, number> | undefined) =>
+      SYMBOLS.map(s => {
+        const v = sig?.[s] ?? 0
+        return v > 0.1 ? '▲' : v < -0.1 ? '▼' : '·'
+      }).join('')
+    const desk_ = (id: string) => {
+      const a = d.agents.find(x => x.id === id)
+      const staff = STAFF[id]
+      const now = busyWith[id]
+      return (
+        <Box key={`desk-${id}`} {...card} width={34} borderColor={now ? 'claude' : 'subtle'}>
+          <Text>
+            {AVATAR[id] ?? '🤖'} <Text bold>{staff?.name ?? name(id)}</Text>
+            {a ? <Text dimColor> {Math.round(a.weight * 100)}%</Text> : null}
+          </Text>
+          <Text size="footnote" color={now ? 'claude' : undefined} dimColor={!now} wrap="truncate">
+            {now ?? (a ? a.note || 'At their desk' : staff?.idle ?? 'At their desk')}
+          </Text>
+          {a ? <Text size="footnote" mono color={tone(SYMBOLS.reduce((s, x) => s + ((a.pending ?? a.signals)[x] ?? 0), 0) / SYMBOLS.length)}>{SYMBOLS.join(' ')}  {arrows(a.pending ?? a.signals).split('').join('   ')}</Text> : null}
+        </Box>
+      )
+    }
+    const room = (title: string, ids: string[]) => (
+      <Box key={title} flexDirection="column">
+        <Text weight="semibold">{title}</Text>
+        <Box flexDirection="row" gap={1} flexWrap="wrap">{ids.map(desk_)}</Box>
+      </Box>
+    )
+    const office = (
+      <Box flexDirection="column" gap={1}>
+        <Text dimColor size="footnote">
+          {isBusy ? '◌ Team meeting in progress — glowing desks are working right now.' : `☕ Quiet. Next team meeting ${d.lastRebalance ? until(d.lastRebalance + REBALANCE_MS) : 'at the next check'}.`} ▲ buy ▼ sell · flat, per coin.
+        </Text>
+        {room('👑 Corner office', ['chief', 'skeptic', 'reporter'])}
+        {room('🛰 Intel room', ['research', 'news', 'bigpicture', 'liquidity', 'crowd', 'social', 'scout'])}
+        {room('📈 Trading floor', ['trend', 'momentum', 'meanrev', 'vol', 'contrarian', 'risk', 'swing'])}
+        {room('🔧 Workshop', ['improver', 'plugins'])}
       </Box>
     )
 
@@ -629,14 +767,14 @@ export const register: Register = on => {
                 <Text>
                   <Text bold color={idea.impact === 'high' ? 'success' : idea.impact === 'medium' ? 'warning' : 'subtle'}>{i + 1}.</Text> {idea.title}
                 </Text>
-                <Button key={`send-imp${i}`} plain label="Send to Claude" onPress={sendIdea(IMPROVER.name, `${idea.title}: ${idea.why}`)} />
+                <Button key={`send-imp${i}`} plain label="🧪 Test & try" onPress={sendIdea(IMPROVER.name, `${idea.title}: ${idea.why}`)} />
               </Box>
               <Text dimColor size="footnote">   {idea.impact} impact · {idea.kind} · {idea.why}</Text>
             </Box>
           ))}
           {d.backlog ? (
             <Text dimColor size="footnote">
-              {isNew(d.backlog.t) ? '● New · ' : ''}Updated {ago(d.backlog.t)}{d.backlog.why ? ` (${d.backlog.why})` : ''}. Nothing changes until you send an idea and Claude tests it.
+              {isNew(d.backlog.t) ? '● New · ' : ''}Updated {ago(d.backlog.t)}{d.backlog.why ? ` (${d.backlog.why})` : ''}. Test & try sends an idea to Claude, who backtests it and only ships it if it helps.
             </Text>
           ) : null}
         </Box>
@@ -656,12 +794,24 @@ export const register: Register = on => {
                   <Text dimColor> · {p.kind}</Text>
                   {p.firstSeen && Date.now() - p.firstSeen < 3 * 24 * 3600_000 ? <Text color="claude"> ● new</Text> : null}
                 </Text>
-                <Button key={`review-plug${i}`} plain label="Ask Claude to review" onPress={reviewPlugin(p.name, p.id, p.kind)} />
+                <Button key={`review-plug${i}`} plain label="⬇ Get it" onPress={reviewPlugin(p.name, p.id, p.kind)} />
               </Box>
               <Text dimColor size="footnote">   {p.why}</Text>
             </Box>
           ))}
           {d.plugins ? <Text dimColor size="footnote">Checked {ago(d.plugins.t)} · {d.plugins.status}. Nothing is installed without your OK.</Text> : null}
+        </Box>
+
+        <Box {...card}>
+          <Box flexDirection="row" justifyContent="space-between">
+            <Text weight="semibold">📚 {RESEARCH.name} · what the team is learning</Text>
+            <Button key="research" plain label="Research now" onPress={() => void research($)} />
+          </Box>
+          {!d.research && <Text dimColor>Once a day: reads crypto and stock forums (Hacker News), crypto news, and what it knows from trading books, then briefs the team.</Text>}
+          {(d.research?.notes ?? []).map((n, i) => (
+            <Text key={`note${i}`} size="footnote">• {n}</Text>
+          ))}
+          {d.research ? <Text dimColor size="footnote">{ago(d.research.t)} · {d.research.status}{d.research.sources.length ? ` · drew on ${d.research.sources.slice(0, 4).join(', ')}` : ''}</Text> : null}
         </Box>
 
         <Box {...card}>
@@ -736,11 +886,6 @@ export const register: Register = on => {
           <Text dimColor size="footnote">Notifies you about big losses, risk cuts, strong calls and panicky markets, at most once per kind every 6 hours.</Text>
         </Box>
         <Box {...card}>
-          <Text weight="semibold">Real money</Text>
-          <Button key="live" label="Suggest real trades (you approve each one)" onPress={goLive} />
-          <Text dimColor size="footnote">Claude previews trades in chat. Nothing is placed without your OK.</Text>
-        </Box>
-        <Box {...card}>
           <Text weight="semibold">Head AI</Text>
           <Box flexDirection="row" gap={1} flexWrap="wrap">
             <Button key="review" label="Review now" onPress={reviewNow} />
@@ -760,7 +905,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column" gap={1}>
         {tabBar}
-        {tab === 'team' ? team : tab === 'updates' ? updates : tab === 'activity' ? activity : tab === 'settings' ? settings : overview}
+        {tab === 'office' ? office : tab === 'team' ? team : tab === 'updates' ? updates : tab === 'activity' ? activity : tab === 'settings' ? settings : overview}
       </Box>
     )
   })

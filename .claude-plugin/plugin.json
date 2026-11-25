@@ -1,1 +1,1 @@
-{ "name": "trading-desk", "version": "0.15.0", "description": "A team of AI analyst agents that paper-trade crypto, learn from results, and show everything in a live pane", "types": "./types/index.d.ts" }
+{ "name": "trading-desk", "version": "0.16.0", "description": "A team of AI analyst agents that paper-trade crypto, learn from results, and show everything in a live pane", "types": "./types/index.d.ts" }

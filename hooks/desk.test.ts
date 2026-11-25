@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { AGENTS, DEFAULT_SETTINGS, isIdle, cacheWarmers, scorecard, parsePluginPicks, brainstormPrompt, improverPrompt, parseImprover, shouldThink, NET_CAP, agentPrompt, alertsFor, moodOf, addUsage, huddleDigest, mergeTally, parseYouTube, VOL_BOOST, volScale, LIMITS, clampSettings, hadLoss, parseChief, periodReport, REBALANCE_MS, START_CASH, cleanNews, isRebalanceDue, prior, equity, newDesk, parseIdeas, parseSignals, rebalance, train, vote, withAgents } from './desk'
+import { AGENTS, DEFAULT_SETTINGS, parseHN, parseRss, parseResearch, parseAccount, memo, isIdle, cacheWarmers, scorecard, parsePluginPicks, brainstormPrompt, improverPrompt, parseImprover, shouldThink, NET_CAP, agentPrompt, alertsFor, moodOf, addUsage, huddleDigest, mergeTally, parseYouTube, VOL_BOOST, volScale, LIMITS, clampSettings, hadLoss, parseChief, periodReport, REBALANCE_MS, START_CASH, cleanNews, isRebalanceDue, prior, equity, newDesk, parseIdeas, parseSignals, rebalance, train, vote, withAgents } from './desk'
 
 test('parses agent replies and clamps signals', async () => {
   const p = parseSignals('Sure: {"BTC": 2, "ETH": -0.5, "SOL": "x", "note": "hi"}')
@@ -259,4 +259,21 @@ test('Social Sentiment sits out without a feed, so it neither costs calls nor di
   // An agent with no signal is left out of the vote rather than counted as 0.
   const v = vote({ ...d, agents: d.agents.map(a => ({ ...a, signals: (a.id === 'trend' ? { BTC: 1 } : {}) as Record<string, number> })) })
   expect(v.BTC).toBe(1)
+})
+
+test('Research AI reads forum and news feeds and its notes reach the team', async () => {
+  expect(parseHN('{"hits":[{"title":"Bitcoin ETF flows","points":120},{"title":null}]}')).toEqual(['Bitcoin ETF flows (120 pts)'])
+  expect(parseHN('not json')).toEqual([])
+  expect(parseRss('<rss><channel><title>Feed</title><item><title><![CDATA[ETH upgrade ships]]></title></item><item><title>SOL outage</title></item></channel></rss>')).toEqual(['ETH upgrade ships', 'SOL outage'])
+  const r = parseResearch('Here: {"notes":["Crowd is euphoric on HYPE","",7],"sources":["Market Wizards"]}')
+  expect(r).toEqual({ notes: ['Crowd is euphoric on HYPE'], sources: ['Market Wizards'] })
+  expect(parseResearch('{"notes":[]}')).toBe(null)
+  const d = { ...newDesk(0), research: { t: 1, status: 'ok', notes: r!.notes, sources: [] } }
+  expect(memo(d).includes('Research note: Crowd is euphoric on HYPE')).toBe(true)
+})
+
+test('Liquid account snapshot is read from get_portfolio', async () => {
+  const a = parseAccount('{"account":{"equity":"30.33","available_balance":"30.33"},"positions":[{"coin":"ETH","szi":"-0.01","positionValue":"16.7","unrealizedPnl":"0.4"}]}', 5)
+  expect(a).toEqual({ t: 5, equity: 30.33, available: 30.33, positions: [{ symbol: 'ETH', side: 'short', value: 16.7, pnl: 0.4 }] })
+  expect(parseAccount('{"error":"x"}', 5)).toBe(null)
 })

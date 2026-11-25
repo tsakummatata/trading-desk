@@ -13,6 +13,10 @@ test('every tab draws on every surface', async $ => {
     const has = async (text: RegExp) => (await ui.find({ type: 'Text', text })) !== undefined
     expect(await has(/Practice money/)).toBe(true)
     expect(await has(/What the team thinks/)).toBe(true)
+    expect(await has(/Your Liquid account/)).toBe(true)
+    await ui.press({ key: 'tab-office' })
+    expect(await has(/Trading floor/)).toBe(true)
+    expect(await has(/Research AI/)).toBe(true)
     await ui.press({ key: 'tab-team' })
     expect(await has(/Agent team · 13/)).toBe(true)
     expect(await has(/Head AI/)).toBe(true)
@@ -20,6 +24,7 @@ test('every tab draws on every surface', async $ => {
     expect(await has(/How to get better/)).toBe(true)
     expect(await has(/Brainstorm/)).toBe(true)
     expect(await has(/Plugin Scout/)).toBe(true)
+    expect(await has(/what the team is learning/)).toBe(true)
     await ui.press({ key: 'tab-activity' })
     expect(await has(/Recent activity/)).toBe(true)
     await ui.press({ key: 'tab-settings' })
