@@ -535,7 +535,7 @@ export function improverPrompt(d: Desk, talk: Talk[] = []): string {
     `AI usage: ${tokens.join('; ') || 'none yet'}. Social feed: ${d.social?.status ?? 'unknown'}.`,
     `Your previous list: ${(d.backlog?.items ?? []).map(i => i.title).join(' | ') || 'none'}`,
     '',
-    'Already tested on price history and rejected, do not propose again: per-coin stop losses, mood-based agent weights, learning faster than rate 40, learning every hour, rebalancing more often than 12h, cutting the chart team below 7 agents, minTrade above 8%, renormalizing the vote over only the agents that made a non-zero call, hand-capping or boosting agents on a few periods of hit rates (the learning already reweights them; a few periods are noise).',
+    'Already tested on price history and rejected, do not propose again: per-coin stop losses, mood-based agent weights, learning faster than rate 40, learning every hour, rebalancing more often than 12h, cutting the chart team below 7 agents, minTrade above 8%, renormalizing the vote over only the agents that made a non-zero call, capping the combined vote of Trend/Momentum/Swing (only cuts exposure; momentum and swing are uncorrelated), hand-capping or boosting agents on a few periods of hit rates (the learning already reweights them; a few periods are noise).',
     'Never propose placing real trades automatically or giving the desk write access to the trading account.',
     '',
     ...(talk.length

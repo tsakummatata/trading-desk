@@ -13,7 +13,7 @@ from tune import atr_frac, score  # noqa: E402
 KEEP = [AGENTS.index(a) for a in ('trend', 'momentum', 'meanrev', 'vol', 'contrarian', 'risk', 'swing')]
 
 
-def simulate(P, S, V, starts, renorm, rng, min_trade=0.08):
+def simulate(P, S, V, starts, renorm, rng, min_trade=0.08, group=None, group_cap=1.0):
     R, A, C = len(starts), S.shape[0], P.shape[1]
     lr, min_w, cap = 40, 0.02, 0.5
     w = np.full((R, A), 1 / A)
@@ -33,8 +33,16 @@ def simulate(P, S, V, starts, renorm, rng, min_trade=0.08):
             on = raw != 0
             sig = np.where(on, np.clip(raw + rng.normal(0, 0.15, raw.shape), -1, 1), 0)
             sig_prev, px_prev = sig, px
-            num = (w[:, :, None] * sig).sum(axis=1)
-            den = (w[:, :, None] * on).sum(axis=1) if renorm else np.ones_like(num)
+            wv = w
+            if group is not None:  # cap the group's combined vote share; learning weights stay untouched
+                g = w[:, group].sum(axis=1, keepdims=True)
+                f = np.where(g > group_cap, group_cap / g, 1.0)
+                wv = w.copy()
+                wv[:, group] *= f
+                rest = [i for i in range(A) if i not in group]
+                wv[:, rest] *= (1 - g * f) / np.maximum(1 - g, 1e-12)
+            num = (wv[:, :, None] * sig).sum(axis=1)
+            den = (wv[:, :, None] * on).sum(axis=1) if renorm else np.ones_like(num)
             vote = np.where(den > 0, num / np.maximum(den, 1e-12), 0)
             conv.append(np.abs(vote).mean())
             v = V[idx]
