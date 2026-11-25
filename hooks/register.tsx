@@ -1,11 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, ModelTextBlock, Register } from 'claude-code'
 
-import type { Desk, Listing, Market, ModelTally, Talk } from '../types'
+import type { Desk, Listing, LiveCoin, Market, ModelTally, Talk } from '../types'
 import type { Call } from './desk'
 import {
   AGENTS, SYMBOLS, START_CASH, addEquityPoint, agentPrompt, cleanNews, equity, newDesk,
-  CHIEF, DEFAULT_SETTINGS, RESEARCH, RESEARCH_FEEDS, RESEARCH_TOPICS, parseHN, parseRss, researchPrompt, parseResearch, parseAccount, isIdle, cacheWarmers, scorecard, IMPROVER, PLUGIN_SCOUT, parsePluginPicks, pluginScoutPrompt, agentName, brainstormPrompt, improverPrompt, parseImprover, MOODS, alertsFor, moodOf, addUsage, huddleDigest, huddlePrompt, mergeTally, parseYouTube, reporterPrompt, skepticPrompt, chiefPrompt, hadLoss, memo, parseChief, periodReport, settingsOf, isRebalanceDue, shouldThink, parseIdeas, parseSignals, rebalance, REBALANCE_MS, scoutPrompt, sparkline, train, trimLog, vote, withAgents,
+  CHIEF, DEFAULT_SETTINGS, CANDLES_URL, CHART_HOURS, candleBody, chart, parseCandles, RESEARCH, RESEARCH_FEEDS, RESEARCH_TOPICS, parseHN, parseRss, researchPrompt, parseResearch, parseAccount, isIdle, cacheWarmers, scorecard, IMPROVER, PLUGIN_SCOUT, parsePluginPicks, pluginScoutPrompt, agentName, brainstormPrompt, improverPrompt, parseImprover, MOODS, alertsFor, moodOf, addUsage, huddleDigest, huddlePrompt, mergeTally, parseYouTube, reporterPrompt, skepticPrompt, chiefPrompt, hadLoss, memo, parseChief, periodReport, settingsOf, isRebalanceDue, shouldThink, parseIdeas, parseSignals, rebalance, REBALANCE_MS, scoutPrompt, sparkline, train, trimLog, vote, withAgents,
 } from './desk'
 
 const PANE = 'trading-desk'
@@ -82,6 +82,30 @@ const desk = atom({ plugin: 'trading-desk', key: 'desk' } as const, newDesk(0), 
 const busy = atom({ plugin: 'trading-desk', key: 'busy' } as const, false)
 const showAll = atom({ plugin: 'trading-desk', key: 'showAll' } as const, false)
 const tabAtom = atom({ plugin: 'trading-desk', key: 'tab' } as const, 'overview')
+const chartCoin = atom({ plugin: 'trading-desk', key: 'chartCoin' } as const, 'BTC')
+
+/** Live chart data: hourly candles from Hyperliquid's public API plus funding and positioning from Liquid (all read-only). */
+async function refreshLive($: EngineInterface, markets: Market[]) {
+  const now = Date.now()
+  const rows = await Promise.all(
+    SYMBOLS.map(async sym => {
+      const [candles, info] = await Promise.all([
+        $.http.fetch(CANDLES_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: candleBody(sym, now) }).then(r => (r.ok ? parseCandles(r.text) : [])).catch(() => [] as number[]),
+        readTool($, 'analyze_market', { symbol: sym }).catch(() => null),
+      ])
+      let j: { ticker?: Record<string, string>; smartMoney?: string } = {}
+      try {
+        j = info ? JSON.parse(info) : {}
+      } catch {
+        // positioning is optional; the chart still draws
+      }
+      const rsi = Number((markets.find(m => m.symbol === sym)?.indicators as { rsi14?: number } | undefined)?.rsi14)
+      const coin: LiveCoin = { closes: candles, rsi: Number.isFinite(rsi) ? rsi : undefined, funding: j.ticker?.funding, change24h: j.ticker?.change24h, oi: j.ticker?.openInterest, smart: j.smartMoney }
+      return [sym, coin] as const
+    }),
+  )
+  await update($, desk, d => ({ ...d, live: { t: now, coins: Object.fromEntries(rows.filter(([, c]) => c.closes.length)) } }))
+}
 /** What each AI is doing right now, for the Office tab. Cleared when the cycle ends. */
 const doing = atom({ plugin: 'trading-desk', key: 'doing' } as const, {} as Record<string, string>)
 const setDoing = ($: EngineInterface, ids: string[], what: string | null) =>
@@ -162,7 +186,7 @@ async function tick($: EngineInterface, force = false) {
       return
     }
     const prices = Object.fromEntries(markets.map(m => [m.symbol, m.price]))
-    await refreshAccount($)
+    await Promise.all([refreshAccount($), refreshLive($, markets)])
     const vol = Object.fromEntries(markets.filter(m => m.vol).map(m => [m.symbol, m.vol!]))
 
     const mood = moodOf(markets.find(m => m.symbol === 'BTC'))
@@ -499,6 +523,7 @@ export const register: Register = on => {
     const expanded = await read($, showAll)
     const tab = await read($, tabAtom)
     const busyWith = await read($, doing)
+    const coin = await read($, chartCoin)
     const sessionCost = await $.session.usage().then(u => u.cost).catch(() => undefined)
     const tok = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n))
     const usageRows = Object.entries(d.costs?.total ?? {})
@@ -561,7 +586,7 @@ export const register: Register = on => {
     const up = ret >= 0
     const avg = SYMBOLS.reduce((s, x) => s + (d.ensemble[x] ?? 0), 0) / SYMBOLS.length
     const nextCheck = d.lastTick ? d.lastTick + d.intervalMin * 60_000 : 0
-    const tabs = [['overview', 'Overview'], ['office', 'Office'], ['team', 'Team'], ['updates', 'Updates'], ['activity', 'Activity'], ['settings', 'Settings']] as const
+    const tabs = [['overview', 'Overview'], ['charts', 'Charts'], ['office', 'Office'], ['team', 'Team'], ['updates', 'Updates'], ['activity', 'Activity'], ['settings', 'Settings']] as const
 
     const tabBar = (
       <Box flexDirection="row" gap={1}>
@@ -650,6 +675,82 @@ export const register: Register = on => {
           )}
           <Button key="live" label="💸 Trade on Liquid (you approve each one)" onPress={goLive} />
           <Text dimColor size="footnote">Claude previews the team's trades in chat. Nothing is placed on your account without your OK.</Text>
+        </Box>
+      </Box>
+    )
+
+    const live = d.live?.coins[coin]
+    const closes = live?.closes ?? []
+    const first = closes[0] ?? 0
+    const last = d.prices[coin] ?? closes.at(-1) ?? 0
+    const move = first ? last / first - 1 : 0
+    const v = d.ensemble[coin] ?? 0
+    const paper = (d.positions[coin] ?? 0) * (d.prices[coin] ?? 0)
+    const real = d.account?.positions.find(p => p.symbol === coin)
+    const rsiWords = (r: number) => (r < 30 ? 'oversold — bounces are common' : r > 70 ? 'overbought — pullbacks are common' : r < 45 ? 'weak' : r > 55 ? 'strong' : 'neutral')
+    const fundWords = (f: string) => (f.trim().startsWith('−') || f.trim().startsWith('-') ? 'shorts pay longs (crowd leans short)' : 'longs pay shorts (crowd leans long)')
+    const stat = (label: string, value: string, note?: string, color?: string) => (
+      <Box key={`stat-${label}`} flexDirection="row" justifyContent="space-between">
+        <Text dimColor>{label}</Text>
+        <Text>
+          <Text bold color={color}>{value}</Text>
+          {note ? <Text dimColor> · {note}</Text> : null}
+        </Text>
+      </Box>
+    )
+    const charts = (
+      <Box flexDirection="column" gap={1}>
+        <Box flexDirection="row" gap={1}>
+          {SYMBOLS.map(s => (
+            <Button key={`coin-${s}`} variant={coin === s ? 'primary' : 'secondary'} label={s} onPress={() => update($, chartCoin, () => s)} />
+          ))}
+        </Box>
+        <Box {...card} borderColor={move >= 0 ? 'success' : 'error'}>
+          <Text>
+            <Text size="title" weight="bold" tabular>{coin} ${last.toLocaleString('en-US')}</Text>
+            <Text color={move >= 0 ? 'success' : 'error'}>  {move >= 0 ? '▲' : '▼'} {pct(move)} in {CHART_HOURS}h</Text>
+          </Text>
+          {closes.length > 1 ? (
+            <Box flexDirection="column">
+              {chart(closes, CHART_HOURS, 7).map((row, i) => (
+                <Text key={`row${i}`} mono color={move >= 0 ? 'success' : 'error'}>{row}</Text>
+              ))}
+              <Text dimColor size="footnote" tabular>
+                {CHART_HOURS}h ago {'·'.repeat(8)} now · high ${Math.max(...closes).toLocaleString('en-US')} · low ${Math.min(...closes).toLocaleString('en-US')}
+              </Text>
+            </Box>
+          ) : (
+            <Text dimColor>The chart fills in with the next check.</Text>
+          )}
+          <Text dimColor size="footnote">Hourly prices from Hyperliquid · updated {ago(d.live?.t ?? 0)}</Text>
+        </Box>
+        <Box {...card}>
+          <Text weight="semibold">What matters right now</Text>
+          {stat('24h change', live?.change24h ?? '—')}
+          {live?.rsi !== undefined ? stat('RSI (1h)', live.rsi.toFixed(0), rsiWords(live.rsi), live.rsi < 30 || live.rsi > 70 ? 'warning' : undefined) : null}
+          {live?.funding ? stat('Funding', live.funding, fundWords(live.funding)) : null}
+          {live?.oi ? stat('Open interest', live.oi) : null}
+          {live?.smart ? <Text size="footnote">🐋 {live.smart}</Text> : null}
+        </Box>
+        <Box {...card}>
+          <Text weight="semibold">The desk on {coin}</Text>
+          {stat('Team vote', lean(v), `${v >= 0 ? '+' : ''}${v.toFixed(2)}`, tone(v))}
+          {stat('Practice bet', paper === 0 ? 'none' : `${paper > 0 ? 'rises' : 'falls'} ${fmt(Math.abs(paper))}`)}
+          {stat('Your Liquid', real ? `${real.side} $${real.value.toFixed(2)}` : 'no position', real ? `${real.pnl >= 0 ? '+' : ''}$${real.pnl.toFixed(2)}` : undefined, real ? (real.pnl >= 0 ? 'success' : 'error') : undefined)}
+        </Box>
+        <Box {...card}>
+          <Text weight="semibold">All coins · last 24h</Text>
+          {SYMBOLS.map(s => {
+            const c = d.live?.coins[s]?.closes.slice(-24) ?? []
+            const m = c.length > 1 ? c.at(-1)! / c[0]! - 1 : 0
+            return (
+              <Box key={`mini-${s}`} flexDirection="row" justifyContent="space-between">
+                <Text bold>{s.padEnd(5)}</Text>
+                <Text mono color={m >= 0 ? 'success' : 'error'}>{sparkline(c, 24) || '—'}</Text>
+                <Text tabular color={m >= 0 ? 'success' : 'error'}>{c.length > 1 ? pct(m) : '—'}</Text>
+              </Box>
+            )
+          })}
         </Box>
       </Box>
     )
@@ -905,7 +1006,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column" gap={1}>
         {tabBar}
-        {tab === 'office' ? office : tab === 'team' ? team : tab === 'updates' ? updates : tab === 'activity' ? activity : tab === 'settings' ? settings : overview}
+        {tab === 'charts' ? charts : tab === 'office' ? office : tab === 'team' ? team : tab === 'updates' ? updates : tab === 'activity' ? activity : tab === 'settings' ? settings : overview}
       </Box>
     )
   })

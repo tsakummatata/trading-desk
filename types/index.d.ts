@@ -57,9 +57,12 @@ export type Desk = {
   /** Research AI: daily notes from forums, news and trading books, shared with the team. */
   research?: { t: number; status: string; notes: string[]; sources: string[] }
   /** The owner's real Liquid account, read-only snapshot. */
+  /** Live chart data per coin: 72 hourly closes plus funding, RSI and positioning, refreshed every check. */
+  live?: { t: number; coins: Record<string, LiveCoin> }
   account?: { t: number; equity: number; available: number; positions: { symbol: string; side: string; value: number; pnl: number }[] }
 }
 
+export type LiveCoin = { closes: number[]; rsi?: number; funding?: string; change24h?: string; oi?: string; smart?: string }
 export type PluginPick = { id: string; name: string; kind: 'plugin' | 'skill'; why: string; fit: 'high' | 'medium' | 'low'; firstSeen: number }
 export type Listing = { id: string; name: string; description: string; kind: 'plugin' | 'skill'; enabled: boolean }
 
@@ -84,6 +87,6 @@ export type PeriodReport = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'trading-desk': { desk: Shaped<Desk>; busy: boolean; showAll: boolean; tab: string; doing: Record<string, string> }
+    'trading-desk': { desk: Shaped<Desk>; busy: boolean; showAll: boolean; tab: string; doing: Record<string, string>; chartCoin: string }
   }
 }

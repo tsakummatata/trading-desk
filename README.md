@@ -20,6 +20,8 @@ Open with `/desk`. Auto ON/OFF runs cycles on a 5, 15 or 60 minute timer, starti
 
 **Plugin Scout.** Once a day (and on "Search now") it searches the Claude plugin and skill directory, read-only, for trading, market data, backtesting, risk, sentiment and on-chain add-ons, and a cheap model ranks up to five against the desk's known gaps, marking ones that are new. It never installs anything: "Get it" has Claude check what the add-on can read or change, then show you its install card; you click install. GitHub trending repositories are not searched: that needs a linked GitHub account.
 
+**Charts.** The Charts tab draws a live 72-hour price chart for the coin you pick (hourly candles from Hyperliquid's public API), with the 24h change, RSI in plain words, funding (who is paying whom), open interest, what profitable traders are doing versus the losing crowd, and the desk's view: the team vote, the practice bet and your real Liquid position on that coin. A 24-hour mini chart of every coin sits underneath. All of it refreshes every check.
+
 **Office.** The Office tab shows every AI at a desk, grouped into rooms (corner office, intel room, trading floor, workshop). During a team meeting each desk lights up with what that AI is doing right now (reading the market, in the huddle, writing the summary), and shows its current buy/sell call per coin.
 
 **Your Liquid account.** Every check reads your real Liquid balance and open positions (read-only, `get_portfolio`) and shows them on the Overview. "Trade on Liquid" has Claude preview the team's trades in chat; each one is placed only after you approve it. The desk never places orders on its own.

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { AGENTS, DEFAULT_SETTINGS, parseHN, parseRss, parseResearch, parseAccount, memo, isIdle, cacheWarmers, scorecard, parsePluginPicks, brainstormPrompt, improverPrompt, parseImprover, shouldThink, NET_CAP, agentPrompt, alertsFor, moodOf, addUsage, huddleDigest, mergeTally, parseYouTube, VOL_BOOST, volScale, LIMITS, clampSettings, hadLoss, parseChief, periodReport, REBALANCE_MS, START_CASH, cleanNews, isRebalanceDue, prior, equity, newDesk, parseIdeas, parseSignals, rebalance, train, vote, withAgents } from './desk'
+import { AGENTS, DEFAULT_SETTINGS, chart, parseCandles, parseHN, parseRss, parseResearch, parseAccount, memo, isIdle, cacheWarmers, scorecard, parsePluginPicks, brainstormPrompt, improverPrompt, parseImprover, shouldThink, NET_CAP, agentPrompt, alertsFor, moodOf, addUsage, huddleDigest, mergeTally, parseYouTube, VOL_BOOST, volScale, LIMITS, clampSettings, hadLoss, parseChief, periodReport, REBALANCE_MS, START_CASH, cleanNews, isRebalanceDue, prior, equity, newDesk, parseIdeas, parseSignals, rebalance, train, vote, withAgents } from './desk'
 
 test('parses agent replies and clamps signals', async () => {
   const p = parseSignals('Sure: {"BTC": 2, "ETH": -0.5, "SOL": "x", "note": "hi"}')
@@ -276,4 +276,15 @@ test('Liquid account snapshot is read from get_portfolio', async () => {
   const a = parseAccount('{"account":{"equity":"30.33","available_balance":"30.33"},"positions":[{"coin":"ETH","szi":"-0.01","positionValue":"16.7","unrealizedPnl":"0.4"}]}', 5)
   expect(a).toEqual({ t: 5, equity: 30.33, available: 30.33, positions: [{ symbol: 'ETH', side: 'short', value: 16.7, pnl: 0.4 }] })
   expect(parseAccount('{"error":"x"}', 5)).toBe(null)
+})
+
+test('live chart: candles parse and the block chart rises with the price', async () => {
+  expect(parseCandles('[{"c":"1"},{"c":"2.5"},{"c":"x"}]')).toEqual([1, 2.5])
+  expect(parseCandles('{"error":1}')).toEqual([])
+  const rows = chart([1, 2, 3, 4], 4, 3)
+  expect(rows.length).toBe(3)
+  expect(rows[2]![0]).toBe('▁')
+  expect(rows[0]![3]).toBe('█')
+  expect(rows[0]![0]).toBe(' ')
+  expect(chart([5], 4, 3)).toEqual([])
 })

@@ -748,3 +748,36 @@ export function parseAccount(json: string, t: number): Desk['account'] | null {
     return null
   }
 }
+
+// ---------- Live charts ----------
+
+/** Hyperliquid's public market-data endpoint (read-only): hourly candles for the chart. */
+export const CANDLES_URL = 'https://api.hyperliquid.xyz/info'
+export const CHART_HOURS = 72
+export const candleBody = (coin: string, now: number) =>
+  JSON.stringify({ type: 'candleSnapshot', req: { coin, interval: '1h', startTime: now - CHART_HOURS * 3600_000, endTime: now } })
+
+export function parseCandles(json: string): number[] {
+  try {
+    const rows = JSON.parse(json) as { c?: string }[]
+    return Array.isArray(rows) ? rows.map(r => Number(r.c)).filter(Number.isFinite) : []
+  } catch {
+    return []
+  }
+}
+
+/** A block chart, top row first: each column is one value, filled up in eighths of a row. */
+export function chart(values: number[], width = 48, height = 6): string[] {
+  const v = values.slice(-width)
+  if (v.length < 2) return []
+  const lo = Math.min(...v)
+  const hi = Math.max(...v)
+  const bars = '▁▂▃▄▅▆▇█'
+  return Array.from({ length: height }, (_, r) =>
+    v.map(x => {
+      const level = hi === lo ? height * 4 : 1 + ((x - lo) / (hi - lo)) * (height * 8 - 1)
+      const fill = Math.max(0, Math.min(8, Math.round(level - (height - 1 - r) * 8)))
+      return fill ? bars[fill - 1] : ' '
+    }).join(''),
+  )
+}
